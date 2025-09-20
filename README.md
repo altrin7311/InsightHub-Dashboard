@@ -1,123 +1,116 @@
-<pre lang="md">
-```md
-# InsightHub Dashboard 🚀
+# 📊 InsightHub Dashboard
 
 **Forecast Smarter. Allocate Better.**  
-An AI-powered executive resource management dashboard built for the Novo Nordisk Hackathon 2025.
+An AI-powered executive resource management dashboard built for the **Novo Nordisk Hackathon 2025**.
 
 ---
 
-## 🔍 Overview
+## 🚀 Overview
 
-InsightHub is a strategic forecasting tool that helps executives and managers at Novo Nordisk make better data-driven decisions on resource planning, demand allocation, and utilization.
+**InsightHub** is a strategic forecasting tool that helps executives and managers at Novo Nordisk make smarter, data-driven decisions for:
+
+- 📌 Resource Planning  
+- 📈 Demand Allocation  
+- 📉 Utilization Monitoring
 
 This interactive dashboard visualizes:
 
-- 🔎 Top Resource Gaps by Project  
-- 📊 Demand Share by Area  
-- 🔥 Area Utilization Heatmap  
-- 📈 Forecast vs Actual Trends  
+- 🧩 **Top Resource Gaps by Project**  
+- 📊 **Demand Share by Area**  
+- 🔥 **Area Utilization Heatmap**  
+- 📈 **Forecast vs Actual Trends**
 
-All charts are exportable and the data is dynamically updatable from CSV or backend sources.
-
----
-
-## 🛠 Tech Stack
-
-| Layer       | Technology        |
-|------------|-------------------|
-| Frontend   | React + TypeScript + Recharts |
-| Backend    | Python + FastAPI + Pandas     |
-| Data       | CSV / XLSX Uploads + Pydantic Models |
-| Styling    | TailwindCSS       |
-| Deployment | Localhost / GitHub Integration |
+All charts are exportable and the data is dynamically updateable via CSV or backend.
 
 ---
 
-## 📸 Preview
+## 🛠️ Tech Stack
 
-![Dashboard Preview](https://github.com/altrin7311/InsightHub-Dashboard/assets/dashboard-screenshot.png) <!-- Replace with actual image if uploaded -->
+| Layer     | Tech Used                           |
+|-----------|-------------------------------------|
+| Frontend  | React · TypeScript · Recharts       |
+| Backend   | Python · FastAPI · Pandas           |
+| Styling   | Tailwind CSS                        |
+| Data      | CSV / Excel Uploads                 |
+| Deployment| Vite (Localhost)                    |
 
 ---
 
-## 🚀 Getting Started
+## 🧪 Features
 
-Clone the repo:
+- ✅ Upload CSV/XLSX data  
+- ✅ Forecasting insights  
+- ✅ Export charts (CSV/PDF)  
+- ✅ Responsive dark/light mode  
+- ✅ Works locally — no cloud dependency  
+
+---
+
+## ⚙️ How to Run Locally
+
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/altrin7311/InsightHub-Dashboard.git
-cd InsightHub-Dashboard
+cd InsightHub-Dashboard/dashboard
 ```
 
-### 1. Run Backend (FastAPI)
+### 2. Run the **Backend** (FastAPI)
 
 ```bash
-cd dashboard/backend
+cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-Server runs on: `http://127.0.0.1:8000`
+> 📍 Runs at: `http://127.0.0.1:8000`
 
-### 2. Run Frontend (React)
+### 3. Run the **Frontend** (React + Vite)
 
 ```bash
-cd dashboard/frontend
+cd ../frontend
 npm install
 npm run dev
 ```
 
-App runs on: `http://localhost:5173`
+> 🌐 Opens at: `http://localhost:5173`
 
 ---
 
-## 📂 Folder Structure
+## 🗂️ Project Structure
 
 ```
 InsightHub-Dashboard/
 │
-├── dashboard/
-│   ├── backend/          # FastAPI backend with data processing
-│   ├── frontend/         # React UI and chart components
-│   ├── data/             # Sample CSV / Excel files
-│   └── .gitignore
+├── backend/        → FastAPI backend
+├── frontend/       → React frontend UI
+├── data/           → Sample CSV/XLSX files
+└── .gitignore
 ```
 
 ---
 
-## 📌 Features
+## 👨‍💻 Team
 
-- Upload data via CSV or Excel
-- Forecast vs Actual insights
-- Top resource gaps by project
-- Export charts as CSV/PDF
-- Works on dark mode
-
----
-
-## 👥 Team
-
-- Altrin Titus – Developer / Dashboard Lead  
-- Preethi / Kajal BPDC – Data Modeling  
-- Team Hygeia – Novo Nordisk Hackathon  
+- **Altrin Titus**, **Aiswarya Katta**, **Jain Prasad**, **Hibah Fathima**, **Preethi Palani** 
+- **Team Hygeia** – Hackathon Collaboration
 
 ---
 
 ## 🧠 Learnings
 
-✅ Data wrangling with Pandas  
-✅ FastAPI endpoints + Recharts integration  
-✅ Real-time interactive dashboards  
-✅ GitHub project collaboration  
+- 🔍 Data wrangling with Pandas  
+- ⚡ API building using FastAPI  
+- 📊 Charting with Recharts  
+- 🔄 CSV uploads with backend integration  
+- 🧪 Rapid prototyping using Vite  
 
 ---
 
 ## 📄 License
 
-MIT License © 2025
+MIT License © 2025 – Altrin Titus
 
 ---
 
-> Built with 💡 at the Novo Nordisk Global Business Services Hackathon 2025.
-```
-</pre>
+> 💡 Built with ❤️ for the Novo Nordisk GBS Hackathon 2025
