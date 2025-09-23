@@ -66,9 +66,12 @@ export type ExtendedSeries = {
 
 export function extendSeriesToYear(
   base: SeriesInput,
-  opts: { mlForecast?: ForecastSource; targetYear?: number } = {}
+  opts: { mlForecast?: ForecastSource; targetYear?: number; maxFutureQuarters?: number } = {}
 ): ExtendedSeries {
   const targetYear = opts.targetYear ?? 2035;
+  const maxFuture = typeof opts.maxFutureQuarters === 'number' && opts.maxFutureQuarters > 0
+    ? Math.max(0, Math.floor(opts.maxFutureQuarters))
+    : Number.POSITIVE_INFINITY;
   const labels = [...base.labels];
   const estimate = [...base.estimate];
   const demand = [...base.demand];
@@ -127,13 +130,20 @@ export function extendSeriesToYear(
     ? Math.max(0, (upper[upper.length - 1] ?? 0) - (demand[demand.length - 1] ?? 0))
     : 0;
 
+  const maxFutureYears = Number.isFinite(maxFuture)
+    ? lastQuarter.year + Math.ceil(maxFuture / 4)
+    : targetYear;
+  const effectiveTargetYear = Math.min(targetYear, maxFutureYears);
+
   let pointer = lastQuarter;
-  while (pointer.year <= targetYear) {
+  let added = 0;
+  while (pointer.year <= effectiveTargetYear) {
+    if (added >= maxFuture) break;
     pointer = nextQuarter(pointer);
-    if (pointer.year > targetYear) break;
+    if (pointer.year > effectiveTargetYear) break;
     const label = formatQuarter(pointer.year, pointer.quarter);
     labels.push(label);
-
+    
     const forecastVal = forecastMap.get(label);
     const mlVal = mlMap.get(label);
     const projected = projectNextValue(demand);
@@ -168,6 +178,8 @@ export function extendSeriesToYear(
         upper.push(0);
       }
     }
+
+    added += 1;
   }
 
   const ci = lower && upper ? { lower, upper } : undefined;

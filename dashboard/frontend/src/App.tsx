@@ -2,10 +2,9 @@ import React from "react";
 import type { UploadResponse } from "./types";
 import Header from "./components/Header";
 import Dashboard from "./components/Dashboard";
-import PreviewTable from "./components/PreviewTable";
 import ForecastChart from "./components/ForecastChart";
 import InfoBlocks from "./components/InfoBlocks";
-import { uploadFile } from "./lib/api";
+import { uploadFile, fetchTrainingResults } from "./lib/api";
 import SignIn from "./components/SignIn";
 import Tabs, { type TabKey } from "./components/Tabs";
 import Chatbot from "./components/Chatbot";
@@ -28,6 +27,17 @@ const App: React.FC = () => {
   const [user, setUser] = React.useState<{ email: string } | null>(() => {
     try { return JSON.parse(localStorage.getItem("auth_user") || "null"); } catch { return null; }
   });
+  const [training, setTraining] = React.useState<UploadResponse["training"] | null>(null);
+
+  const mergedMetrics = React.useMemo(() => {
+    if (!data) return derived?.metrics || {};
+    return { ...(data.metrics || {}), ...(derived?.metrics || {}) };
+  }, [data, derived?.metrics]);
+
+  const mergedTimeseries = React.useMemo(() => {
+    if (derived?.timeseries) return derived.timeseries;
+    return data?.timeseries ?? null;
+  }, [derived?.timeseries, data?.timeseries]);
 
   React.useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -66,12 +76,15 @@ const App: React.FC = () => {
     e.preventDefault();
     setError(null);
     setData(null);
+    setDerived(null);
+    setTraining(null);
     if (!file) return;
 
     setLoading(true);
     try {
       const json = await uploadFile(file);
       setData(json);
+      setTraining(json.training ?? null);
       setActiveTab("summary");
     } catch (err: any) {
       setError(err?.message ?? "Unknown error");
@@ -84,6 +97,9 @@ const App: React.FC = () => {
     setFile(null);
     setData(null);
     setError(null);
+    setDerived(null);
+    setTraining(null);
+    setFilters({});
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -109,6 +125,7 @@ const App: React.FC = () => {
       setError(null);
       const json = await uploadFile(f);
       setData(json);
+      setTraining(json.training ?? null);
       setActiveTab("summary");
     } catch (e: any) {
       console.error("Failed to load sample.csv", e);
@@ -117,6 +134,24 @@ const App: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const openDataViewer = React.useCallback((dataset: 'real' | 'aug') => {
+    const url = new URL(window.location.href);
+    url.pathname = '/viewer';
+    url.search = dataset === 'aug' ? '?dataset=aug' : '?dataset=real';
+    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+  }, []);
+
+  const enrichedData = React.useMemo(() => {
+    if (!data) return null;
+    const merged: UploadResponse = {
+      ...data,
+      metrics: mergedMetrics,
+      ...(mergedTimeseries ? { timeseries: mergedTimeseries } : {}),
+      ...(training ? { training } : {}),
+    };
+    return merged;
+  }, [data, mergedMetrics, mergedTimeseries, training]);
 
   React.useEffect(() => {
     const run = async () => {
@@ -129,6 +164,55 @@ const App: React.FC = () => {
     };
     run();
   }, [JSON.stringify(filters), !!data]);
+
+  React.useEffect(() => {
+    if (!data) return;
+    const hasTraining = training?.real || training?.augmented;
+    let disposed = false;
+    let retryHandle: number | undefined;
+
+    const schedule = (delay: number) => {
+      retryHandle = window.setTimeout(async () => {
+        try {
+          const latest = await fetchTrainingResults();
+          if (disposed) return;
+          const nextTraining = { real: latest.real ?? null, augmented: latest.augmented ?? null } as UploadResponse["training"];
+          setTraining(nextTraining);
+          if ((latest.real?.status === "running") || (latest.augmented?.status === "running")) {
+            schedule(1500);
+          }
+        } catch {
+          if (!disposed) {
+            schedule(3000);
+          }
+        }
+      }, delay);
+    };
+
+    if (!hasTraining || training?.real?.status === "running" || training?.augmented?.status === "running") {
+      schedule(hasTraining ? 1200 : 400);
+    }
+
+    return () => {
+      disposed = true;
+      if (retryHandle) window.clearTimeout(retryHandle);
+    };
+  }, [data, training?.real?.status, training?.augmented?.status]);
+
+  React.useEffect(() => {
+    if (!data) return;
+    if (training) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const latest = await fetchTrainingResults();
+        if (!cancelled) {
+          setTraining({ real: latest.real ?? null, augmented: latest.augmented ?? null });
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [data, training]);
 
   if (!user) {
     return <SignIn onSuccess={(email) => setUser({ email })} />;
@@ -143,8 +227,8 @@ const App: React.FC = () => {
         {printing && data && (
           <PrintReport data={{ ...data, ...(derived?.timeseries ? { timeseries: derived.timeseries } : {}), metrics: { ...data.metrics, ...(derived?.metrics || {}) } }} filters={filters} />
         )}
-        {data && (
-          <FiltersBar data={data} value={filters} onChange={setFilters} />
+        {enrichedData && (
+          <FiltersBar data={enrichedData} value={filters} onChange={setFilters} />
         )}
         <Tabs active={activeTab} onChange={setActiveTab} disabled={{ summary: !data, estimate: !data, dvs: !data, fte: !data, forecasting: !data, admin: false }} />
         {activeTab === "upload" && (
@@ -203,50 +287,40 @@ const App: React.FC = () => {
             </div>
           </section>
           {data && (
-            <>
-              <section className="card">
-                <div className="card-header">Preview — Real Data (first 10)</div>
-                <div className="card-body">
-                  <PreviewTable columns={data.columns} rows={data.preview} />
-                  <div className="muted" style={{ marginTop: 6 }}>Rows: {data.row_count ?? data.preview.length}</div>
-                </div>
-              </section>
+            <div className="preview-tab-bar" style={{ marginTop: 18 }}>
+              <button type="button" className="preview-tab" onClick={() => openDataViewer('real')}>
+                Preview — Real Data
+              </button>
               {Array.isArray((data as any).aug_preview) && (
-                <section className="card">
-                  <div className="card-header">Preview — Real + Synthetic (first 10)</div>
-                  <div className="card-body">
-                    <PreviewTable columns={data.columns} rows={(data as any).aug_preview as any[]} />
-                    <div className="muted" style={{ marginTop: 6 }}>Rows: {(data as any).aug_row_count}</div>
-                  </div>
-                </section>
+                <button type="button" className="preview-tab" onClick={() => openDataViewer('aug')}>
+                  Preview — Real + Synthetic
+                </button>
               )}
-            </>
+              <span className="preview-tab-hint">Opens new tab with full dataset & download.</span>
+            </div>
           )}
         </div>
         )}
 
-        {activeTab === "summary" && data && (
+        {activeTab === "summary" && enrichedData && (
           <section style={{ marginTop: 18 }}>
-            <Dashboard
-              data={{ ...data, ...(derived?.timeseries ? { timeseries: derived.timeseries } : {}), metrics: { ...data.metrics, ...(derived?.metrics || {}) } }}
-              filters={filters}
-            />
+            <Dashboard data={enrichedData} filters={filters} />
           </section>
         )}
 
-        {activeTab === "estimate" && data && (
+        {activeTab === "estimate" && enrichedData && (
           <section style={{ marginTop: 18 }}>
             <div className="card">
               <div className="card-header">Estimate vs Demand</div>
               <div className="card-body">
                 <div className="muted" style={{ marginBottom: 8 }}>Aggregated across all projects by quarter</div>
-                {data.timeseries ? (
+                {enrichedData.timeseries ? (
                   <ForecastChart
-                    labels={data.timeseries.labels}
-                    estimate={data.timeseries.estimate}
-                    demand={data.timeseries.demand}
-                    supply={data.timeseries.supply}
-                    band={data.timeseries.ci}
+                    labels={enrichedData.timeseries.labels}
+                    estimate={enrichedData.timeseries.estimate}
+                    demand={enrichedData.timeseries.demand}
+                    supply={enrichedData.timeseries.supply}
+                    band={enrichedData.timeseries.ci}
                     height={360}
                     highlightGap="estimate-demand"
                   />
@@ -259,26 +333,26 @@ const App: React.FC = () => {
             <InfoBlocks
               heading="Insights"
               items={[
-                { title: 'Highest demand quarter', detail: data.timeseries ? data.timeseries.labels[data.timeseries.demand.indexOf(Math.max(...data.timeseries.demand))] : 'n/a', tone: 'neutral' },
-                { title: 'Demand vs Estimate delta', detail: data.timeseries ? (Math.round((data.timeseries.demand.reduce((a,b)=>a+b,0) - data.timeseries.estimate.reduce((a,b)=>a+b,0))*100)/100).toString() : 'n/a', tone: 'warn' },
-                { title: 'Projects', detail: (data.metrics?.projects ?? 0).toString(), tone: 'good' },
+                { title: 'Highest demand quarter', detail: enrichedData.timeseries ? enrichedData.timeseries.labels[enrichedData.timeseries.demand.indexOf(Math.max(...enrichedData.timeseries.demand))] : 'n/a', tone: 'neutral' },
+                { title: 'Demand vs Estimate delta', detail: enrichedData.timeseries ? (Math.round((enrichedData.timeseries.demand.reduce((a,b)=>a+b,0) - enrichedData.timeseries.estimate.reduce((a,b)=>a+b,0))*100)/100).toString() : 'n/a', tone: 'warn' },
+                { title: 'Projects', detail: (enrichedData.metrics?.projects ?? 0).toString(), tone: 'good' },
               ]}
             />
           </section>
         )}
 
-        {activeTab === "dvs" && data && (
+        {activeTab === "dvs" && enrichedData && (
           <section style={{ marginTop: 18 }}>
             <div className="card">
               <div className="card-header">Demand vs Supply</div>
               <div className="card-body">
                 <div className="muted" style={{ marginBottom: 8 }}>Supply approximates Estimate when Supply columns are not present.</div>
-                {data.timeseries ? (
+                {enrichedData.timeseries ? (
                   <ForecastChart
-                    labels={data.timeseries.labels}
-                    estimate={data.timeseries.estimate}
-                    demand={data.timeseries.demand}
-                    supply={data.timeseries.supply}
+                    labels={enrichedData.timeseries.labels}
+                    estimate={enrichedData.timeseries.estimate}
+                    demand={enrichedData.timeseries.demand}
+                    supply={enrichedData.timeseries.supply}
                     height={360}
                     highlightGap="demand-supply"
                   />
@@ -291,26 +365,26 @@ const App: React.FC = () => {
             <InfoBlocks
               heading="Demand vs Supply Notes"
               items={[
-                { title: 'Total demand', detail: data.metrics?.total_demand ? Math.round(data.metrics.total_demand).toLocaleString() : 'n/a', tone: 'neutral' },
-                { title: 'Total supply', detail: data.metrics?.total_supply ? Math.round(data.metrics.total_supply).toLocaleString() : 'n/a', tone: 'neutral' },
-                { title: 'Utilization', detail: data.metrics?.utilization_rate ? `${data.metrics.utilization_rate.toFixed(1)}%` : 'n/a', tone: 'good' },
+                { title: 'Total demand', detail: enrichedData.metrics?.total_demand ? Math.round(enrichedData.metrics.total_demand).toLocaleString() : 'n/a', tone: 'neutral' },
+                { title: 'Total supply', detail: enrichedData.metrics?.total_supply ? Math.round(enrichedData.metrics.total_supply).toLocaleString() : 'n/a', tone: 'neutral' },
+                { title: 'Utilization', detail: enrichedData.metrics?.utilization_rate ? `${enrichedData.metrics.utilization_rate.toFixed(1)}%` : 'n/a', tone: 'good' },
               ]}
             />
           </section>
         )}
 
-        {activeTab === "fte" && data && (
+        {activeTab === "fte" && enrichedData && (
           <section style={{ marginTop: 18 }}>
             <div className="card">
               <div className="card-header">FTE Trend</div>
               <div className="card-body">
                 <div className="muted">Using preview-derived totals; replace with team’s actual FTE mapping when available.</div>
-                {data.timeseries ? (
+                {enrichedData.timeseries ? (
                   <ForecastChart
-                    labels={data.timeseries.labels}
-                    estimate={data.timeseries.estimate}
-                    demand={data.timeseries.estimate}
-                    supply={data.timeseries.estimate}
+                    labels={enrichedData.timeseries.labels}
+                    estimate={enrichedData.timeseries.estimate}
+                    demand={enrichedData.timeseries.estimate}
+                    supply={enrichedData.timeseries.estimate}
                     height={300}
                   />
                 ) : (
@@ -322,7 +396,7 @@ const App: React.FC = () => {
             <InfoBlocks
               heading="FTE Highlights"
               items={[
-                { title: 'Peak FTE quarter', detail: data.timeseries ? data.timeseries.labels[data.timeseries.estimate.indexOf(Math.max(...data.timeseries.estimate))] : 'n/a', tone: 'neutral' },
+                { title: 'Peak FTE quarter', detail: enrichedData.timeseries ? enrichedData.timeseries.labels[enrichedData.timeseries.estimate.indexOf(Math.max(...enrichedData.timeseries.estimate))] : 'n/a', tone: 'neutral' },
                 { title: 'Recent trend', detail: 'Gradual increase with seasonal peaks', tone: 'good' },
                 { title: 'Recommendation', detail: 'Plan hiring 1–2 quarters ahead of forecast peaks', tone: 'good' },
               ]}
@@ -330,15 +404,20 @@ const App: React.FC = () => {
           </section>
         )}
 
-        {activeTab === "admin" && (
+        {activeTab === "admin" && enrichedData && (
           <section style={{ marginTop: 18 }}>
-            <Admin />
+            <Admin data={enrichedData} onRefreshTraining={async () => {
+              try {
+                const latest = await fetchTrainingResults();
+                setTraining({ real: latest.real ?? null, augmented: latest.augmented ?? null });
+              } catch {}
+            }} />
           </section>
         )}
 
-        {activeTab === "forecasting" && data && (
+        {activeTab === "forecasting" && enrichedData && (
           <section style={{ marginTop: 18 }}>
-            <Forecasting data={data} />
+            <Forecasting data={enrichedData} />
           </section>
         )}
 

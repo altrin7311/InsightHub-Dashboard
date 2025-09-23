@@ -14,6 +14,8 @@ type Segment = { name: string; value: number | string; color?: string };
 type Props = {
   segments: Segment[];
   height?: number;
+  allAreas?: string[];
+  outerRadius?: number;
 };
 
 const PALETTE = [
@@ -26,17 +28,31 @@ const PALETTE = [
   "#eab308",
 ];
 
-const DonutChart: React.FC<Props> = ({ segments, height = 240 }) => {
+const DonutChart: React.FC<Props> = ({
+  segments,
+  height = 240,
+  allAreas,
+  outerRadius = 90,
+}) => {
   const hostRef = useRef<HTMLDivElement>(null);
 
-  const data = segments.map((s, i) => ({
-    name: String(s.name),
-    value: Number(s.value || 0),
-    color: s.color || PALETTE[i % PALETTE.length],
-  }));
+  const baseNames =
+    allAreas && allAreas.length ? allAreas : segments.map((s) => String(s.name));
+  const lookup = new Map<string, Segment>();
+  segments.forEach((s) => lookup.set(String(s.name), s));
+
+  const data = baseNames.map((name, i) => {
+    const segment = lookup.get(name) ?? { name, value: 0 };
+    return {
+      name,
+      value: Number(segment.value || 0),
+      color: segment.color || PALETTE[i % PALETTE.length],
+    };
+  });
 
   const total =
     data.reduce((acc, d) => acc + (Number.isFinite(d.value) ? d.value : 0), 0) || 1;
+  const legendFont = data.length > 8 ? 10 : data.length > 6 ? 11 : 13;
 
   return (
     <div
@@ -52,11 +68,17 @@ const DonutChart: React.FC<Props> = ({ segments, height = 240 }) => {
             data={data}
             dataKey="value"
             nameKey="name"
-            innerRadius={60}
-            outerRadius={90}
+            innerRadius={Math.max(40, outerRadius - 40)}
+            outerRadius={outerRadius}
             stroke="#0b0f13"
             strokeWidth={1}
             isAnimationActive
+            labelLine={false}
+            label={({ name, value, percent }) => {
+              if (!value) return "";
+              const pct = Math.round((percent || 0) * 100);
+              return `${name} (${pct}%)`;
+            }}
           >
             {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={entry.color} />
@@ -74,7 +96,12 @@ const DonutChart: React.FC<Props> = ({ segments, height = 240 }) => {
               border: "1px solid var(--border)",
             }}
           />
-          <Legend wrapperStyle={{ color: "var(--muted)" }} layout="vertical" align="right" verticalAlign="middle" />
+          <Legend
+            wrapperStyle={{ color: "var(--muted)", fontSize: legendFont }}
+            layout="vertical"
+            align="right"
+            verticalAlign="middle"
+          />
         </PieChart>
       </ResponsiveContainer>
     </div>

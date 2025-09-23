@@ -25,7 +25,7 @@ const ChartLine: React.FC<Props> = ({ labels, series, height = 320, band }) => {
     const W = canvas.clientWidth; const H = canvas.clientHeight;
     ctx.clearRect(0, 0, W, H);
 
-    const pad = { left: 46, right: 16, top: 16, bottom: 28 } as const;
+    const pad = { left: 46, right: 16, top: 16, bottom: 44 } as const;
     const plotW = W - pad.left - pad.right;
     const plotH = H - pad.top - pad.bottom;
 
@@ -59,7 +59,7 @@ const ChartLine: React.FC<Props> = ({ labels, series, height = 320, band }) => {
 
     // X labels (thin to avoid overlap)
     const stepX = plotW / Math.max(1, labels.length - 1);
-    const maxTicks = 10;
+    const maxTicks = 6;
     const tickStep = Math.max(1, Math.ceil(labels.length / maxTicks));
     for (let i = 0; i < labels.length; i += tickStep) {
       const x = pad.left + stepX * i;

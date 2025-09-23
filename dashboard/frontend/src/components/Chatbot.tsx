@@ -1,9 +1,14 @@
 import React from "react";
 import type { UploadResponse } from "../types";
 
-type Props = { context?: UploadResponse | null };
+// Use relative path if VITE_API_BASE is not set (for production)
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE ||
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? "http://127.0.0.1:8000"
+    : "");
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE ?? "http://127.0.0.1:8000";
+type Props = { context?: UploadResponse | null };
 
 type Msg = { role: "user" | "assistant"; text: string };
 

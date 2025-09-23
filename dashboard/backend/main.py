@@ -8,17 +8,21 @@ from io import BytesIO, StringIO
 import numpy as np
 import re
 import math
+from datetime import datetime
 
 app = FastAPI()
 # Very simple in-memory cache of last uploaded dataset for metrics
 LAST_DATA: dict = {}
+# Cache most recent model training runs (real vs augmented)
+LAST_TRAINING: dict[str, dict | None] = {"real": None, "augmented": None}
 
 # CORS setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        # Add your deployed frontend URLs here as needed
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -191,9 +195,9 @@ async def upload_excel(file: UploadFile = File(...)):
             # Sort by year, quarter
             keys = sorted(agg.keys())
             labels = [f"Q{q} {y}" for (y, q) in keys]
-            estimate = [round(agg[k]["estimate"], 2) for k in keys]
-            demand_s = [round(agg[k]["demand"], 2) for k in keys]
-            supply_s = [round(agg[k]["supply"], 2) for k in keys]
+            estimate = [round(float(agg[k]["estimate"]) if math.isfinite(float(agg[k]["estimate"])) else 0.0, 2) for k in keys]
+            demand_s = [round(float(agg[k]["demand"]) if math.isfinite(float(agg[k]["demand"])) else 0.0, 2) for k in keys]
+            supply_s = [round(float(agg[k]["supply"]) if math.isfinite(float(agg[k]["supply"])) else 0.0, 2) for k in keys]
             # If supply is missing, approximate with estimate
             if not any(supply_s) and any(estimate):
                 supply_s = estimate[:]
@@ -208,10 +212,27 @@ async def upload_excel(file: UploadFile = File(...)):
                 "supply": supply_s,
                 "ci": {"lower": ci_lower, "upper": ci_upper},
             }
+            def _sanitize(nums):
+                cleaned = []
+                for val in nums or []:
+                    try:
+                        f = float(val)
+                    except Exception:
+                        f = 0.0
+                    if not math.isfinite(f):
+                        f = 0.0
+                    cleaned.append(round(f, 4))
+                return cleaned
+            series["estimate"] = _sanitize(series.get("estimate"))
+            series["demand"] = _sanitize(series.get("demand"))
+            series["supply"] = _sanitize(series.get("supply"))
+            if series.get("ci"):
+                series["ci"]["lower"] = _sanitize(series["ci"].get("lower"))
+                series["ci"]["upper"] = _sanitize(series["ci"].get("upper"))
 
             # Row-level totals to identify bottlenecks (demand > estimate)
-            row_demand_total = df[demand_cols].applymap(to_num).fillna(0).sum(axis=1) if demand_cols else None
-            row_estimate_total = df[estimate_cols].applymap(to_num).fillna(0).sum(axis=1) if estimate_cols else None
+            row_demand_total = df[demand_cols].apply(lambda col: col.map(to_num)).fillna(0).sum(axis=1) if demand_cols else None
+            row_estimate_total = df[estimate_cols].apply(lambda col: col.map(to_num)).fillna(0).sum(axis=1) if estimate_cols else None
             bottlenecks = []
             if row_demand_total is not None and row_estimate_total is not None:
                 gaps = row_demand_total - row_estimate_total
@@ -407,10 +428,119 @@ async def upload_excel(file: UploadFile = File(...)):
             },
             "timeseries": series,
             "ml": ml,
-            "bottlenecks": bottlenecks,
+            "bottlenecks": bottlenecks or [],
             "filters": filters,
             "aug_preview": df_aug.head(10).replace({np.nan: None, np.inf: None, -np.inf: None}).to_dict(orient="records"),
         }
+        # Aggregate per-quarter area metrics for frontend comparisons when no explicit quarter column exists
+        area_quarter_stats: dict[tuple[str, str], dict[str, float | str | None]] = {}
+        area_totals: dict[str, dict[str, float]] = {}
+        if quarter_cols:
+            for _, row in df.iterrows():
+                area_name = "All"
+                if area_col and area_col in df.columns:
+                    raw = row.get(area_col)
+                    area_name = str(raw).strip() if raw is not None and str(raw).strip() else "Unspecified"
+                for col, yy, qq, kind in quarter_cols:
+                    if col not in df.columns:
+                        continue
+                    val = to_num(row.get(col))
+                    if not (isinstance(val, (int, float)) and math.isfinite(val)):
+                        continue
+                    label = f"Q{qq} {yy}"
+                    bucket = area_quarter_stats.setdefault((label, area_name), {
+                        "quarter": label,
+                        "year": int(yy),
+                        "q": int(qq),
+                        "area": area_name,
+                        "estimate": 0.0,
+                        "demand": 0.0,
+                        "supply": 0.0,
+                    })
+                    if kind == "demand":
+                        bucket["demand"] = float(bucket.get("demand", 0.0) + float(val))
+                    elif kind == "supply":
+                        bucket["supply"] = float(bucket.get("supply", 0.0) + float(val))
+                    else:
+                        bucket["estimate"] = float(bucket.get("estimate", 0.0) + float(val))
+
+                    totals = area_totals.setdefault(area_name, {"estimate": 0.0, "demand": 0.0, "supply": 0.0})
+                    if kind == "demand":
+                        totals["demand"] += float(val)
+                    elif kind == "supply":
+                        totals["supply"] += float(val)
+                    else:
+                        totals["estimate"] += float(val)
+
+        if area_quarter_stats:
+            matrix_rows: list[dict[str, float | str | None]] = []
+            for key, entry in area_quarter_stats.items():
+                estimate = float(entry.get("estimate", 0.0) or 0.0)
+                demand_val = float(entry.get("demand", 0.0) or 0.0)
+                supply_val = float(entry.get("supply", 0.0) or 0.0)
+                if supply_val == 0.0 and estimate:
+                    supply_val = estimate
+                if supply_val == 0.0 and demand_val and not estimate:
+                    supply_val = demand_val
+                gap = demand_val - supply_val
+                util = (supply_val / demand_val * 100.0) if demand_val else None
+                matrix_rows.append({
+                    "quarter": entry["quarter"],
+                    "area": entry["area"],
+                    "estimate": round(estimate, 3),
+                    "demand": round(demand_val, 3),
+                    "supply": round(supply_val, 3),
+                    "gap": round(gap, 3),
+                    "utilization": None if util is None else round(util, 3),
+                    "year": entry["year"],
+                    "quarter_index": entry["q"],
+                })
+            matrix_rows.sort(key=lambda r: (int(r.get("year", 0) or 0), int(r.get("quarter_index", 0) or 0), str(r.get("area", ""))))
+            for row in matrix_rows:
+                row.pop("year", None)
+                row.pop("quarter_index", None)
+            payload["area_quarter_matrix"] = matrix_rows
+            LAST_DATA["area_quarter_matrix"] = matrix_rows
+
+        if area_totals:
+            totals_payload = []
+            for area_name, stats in area_totals.items():
+                est = float(stats.get("estimate", 0.0) or 0.0)
+                dem = float(stats.get("demand", 0.0) or 0.0)
+                sup = float(stats.get("supply", 0.0) or 0.0)
+                if sup == 0.0 and est:
+                    sup = est
+                if sup == 0.0 and dem and not est:
+                    sup = dem
+                totals_payload.append({
+                    "area": area_name,
+                    "estimate": round(est, 3),
+                    "demand": round(dem, 3),
+                    "supply": round(sup, 3),
+                })
+            totals_payload.sort(key=lambda item: item["area"] or "")
+            payload["area_totals"] = totals_payload
+            LAST_DATA["area_totals"] = totals_payload
+
+        # Automatically train models for both datasets when new data is uploaded
+        training_records: dict[str, dict | None] = {}
+        for augmented_flag in (False, True):
+            key = "augmented" if augmented_flag else "real"
+            try:
+                record = store_training_result(augmented_flag)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                record = {
+                    "status": "error",
+                    "timestamp": datetime.utcnow().isoformat() + 'Z',
+                    "augmented": augmented_flag,
+                    "result": None,
+                    "error": str(exc),
+                    "horizon": 8,
+                }
+                LAST_TRAINING[key] = record
+            training_records[key] = record
+        if training_records:
+            payload["training"] = training_records
         return jsonable_encoder(payload)
     except HTTPException:
         raise
@@ -600,9 +730,9 @@ async def metrics(req: MetricsRequest):
 
     keys = sorted(agg.keys())
     labels = [f"Q{q} {y}" for (y, q) in keys]
-    estimate = [round(agg[k]["estimate"], 3) for k in keys]
-    demand = [round(agg[k]["demand"], 3) for k in keys]
-    supply = [round(agg[k]["supply"], 3) for k in keys]
+    estimate = [round(float(agg[k]["estimate"]) if math.isfinite(float(agg[k]["estimate"])) else 0.0, 3) for k in keys]
+    demand = [round(float(agg[k]["demand"]) if math.isfinite(float(agg[k]["demand"])) else 0.0, 3) for k in keys]
+    supply = [round(float(agg[k]["supply"]) if math.isfinite(float(agg[k]["supply"])) else 0.0, 3) for k in keys]
     if not any(supply) and any(estimate):
         supply = estimate[:]
 
@@ -705,21 +835,17 @@ async def metrics(req: MetricsRequest):
     })
 
 
-class TrainRequest(BaseModel):
-    augmented: bool = True
-    horizon: int = 8  # quarters to forecast (>= to cover up to 2031 automatically)
-
-
-@app.post("/train")
-async def train(req: TrainRequest):
+def compute_training(augmented: bool, horizon: int = 8) -> dict:
     if LAST_DATA.get("df") is None:
-        raise HTTPException(status_code=400, detail="No dataset uploaded yet")
-    df = LAST_DATA.get("df_aug") if req.augmented and LAST_DATA.get("df_aug") is not None else LAST_DATA.get("df")
+        raise ValueError("No dataset uploaded yet")
+    df_source = LAST_DATA.get("df_aug") if augmented and LAST_DATA.get("df_aug") is not None else LAST_DATA.get("df")
+    if df_source is None:
+        raise ValueError("Augmented dataset not available")
+    df = df_source.copy()
     quarter_cols = LAST_DATA.get("quarter_cols", [])
     if not quarter_cols:
-        raise HTTPException(status_code=400, detail="No quarter columns detected for timeseries training")
+        raise ValueError("No quarter columns detected for timeseries training")
 
-    # Aggregate series
     def to_num(x):
         try:
             if pd.isna(x):
@@ -735,7 +861,7 @@ async def train(req: TrainRequest):
                 return np.nan
         return np.nan
 
-    agg: dict[tuple[int,int], dict[str, float]] = {}
+    agg: dict[tuple[int, int], dict[str, float]] = {}
     for col, y, q, kind in quarter_cols:
         if col not in df.columns:
             continue
@@ -752,14 +878,12 @@ async def train(req: TrainRequest):
     demand = [float(agg[k]["demand"]) for k in keys]
     base = demand if any(demand) else estimate
     if len(base) < 8:
-        raise HTTPException(status_code=400, detail="Not enough points for train/test split (need >= 8 quarters)")
+        raise ValueError("Not enough points for train/test split (need >= 8 quarters)")
 
-    # Train/test split: last 4 quarters for test
     test_h = 4 if len(base) >= 12 else max(2, len(base) // 5)
     train = np.array(base[:-test_h], dtype=float)
     test = np.array(base[-test_h:], dtype=float)
 
-    # Holt–Winters with safe fallback
     model_name = 'Holt–Winters (additive)'
     try:
         from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -768,11 +892,10 @@ async def train(req: TrainRequest):
         fit = model.fit(optimized=True)
         pred_test = np.array(fit.forecast(test_h), dtype=float)
     except Exception:
-        # Fallback: persistence baseline for test; moving average for forecast below
         pred_test = np.array([train[-1]] * test_h, dtype=float)
         model_name = 'Moving Average (fallback)'
+        fit = None
 
-    # Metrics
     def mae(y, yhat):
         return float(np.nanmean(np.abs(y - yhat)))
     def rmse(y, yhat):
@@ -792,7 +915,6 @@ async def train(req: TrainRequest):
         "r2": r2(test, pred_test),
     }
 
-    # Baseline: last value persistence
     baseline = np.array([train[-1]] * test_h, dtype=float)
     metrics_baseline = {
         "mae": mae(test, baseline),
@@ -801,21 +923,21 @@ async def train(req: TrainRequest):
         "r2": r2(test, baseline),
     }
 
-    # Future forecast
-    # Forecast enough steps to reach end of 2031 (or requested horizon)
     target_year = 2031
     last = labels[-1]
     m = re.match(r"Q(\d)\s+(\d{4})", last)
     q = int(m.group(1)) if m else 4
     y = int(m.group(2)) if m else 2030
     to_2031 = max(0, (target_year - y) * 4 + (4 - q))
-    steps = max(req.horizon, to_2031)
+    steps = max(horizon, to_2031)
     try:
+        if fit is None:
+            raise RuntimeError("HW model not available")
         future = np.array(fit.forecast(steps), dtype=float)
     except Exception:
-        # Moving-average fallback for future if HW failed
         avg = float(np.nanmean(train[-min(4, len(train)):]))
         future = np.array([avg] * steps, dtype=float)
+
     flabels = []
     for _ in range(steps):
         q += 1
@@ -828,10 +950,83 @@ async def train(req: TrainRequest):
     aug_df = LAST_DATA.get("df_aug")
     real_rows = int(len(real_df)) if real_df is not None else 0
     aug_rows = int(len(aug_df)) if aug_df is not None else 0
-    return jsonable_encoder({
+
+    return {
         "rows": {"real": real_rows, "augmented": aug_rows},
-        "series": {"labels": labels, "base": base, "train_size": int(len(train)), "test_size": int(len(test))},
-        "pred": {"test_labels": labels[-test_h:], "test_actual": test.tolist(), "test_pred": pred_test.tolist()},
+        "series": {"labels": labels, "base": list(base), "train_size": int(len(train)), "test_size": int(len(test))},
+        "pred": {"test_labels": list(labels[-test_h:]), "test_actual": list(test), "test_pred": list(pred_test)},
         "metrics": {"model": metrics_model, "baseline": metrics_baseline, "name": model_name},
         "forecast": {"labels": flabels, "values": future.tolist()}
+    }
+
+
+def store_training_result(augmented: bool, horizon: int = 8) -> dict:
+    key = 'augmented' if augmented else 'real'
+    LAST_TRAINING[key] = {
+        "status": "running",
+        "timestamp": datetime.utcnow().isoformat() + 'Z',
+        "augmented": augmented,
+        "result": None,
+        "error": None,
+        "horizon": horizon,
+    }
+    try:
+        result = compute_training(augmented, horizon)
+        record = {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat() + 'Z',
+            "augmented": augmented,
+            "result": result,
+            "error": None,
+            "horizon": horizon,
+        }
+        LAST_TRAINING[key] = record
+        return record
+    except Exception as exc:
+        record = {
+            "status": "error",
+            "timestamp": datetime.utcnow().isoformat() + 'Z',
+            "augmented": augmented,
+            "result": None,
+            "error": str(exc),
+            "horizon": horizon,
+        }
+        LAST_TRAINING[key] = record
+        return record
+
+class TrainRequest(BaseModel):
+    augmented: bool = True
+    horizon: int = 8  # quarters to forecast (>= to cover up to 2031 automatically)
+
+
+@app.post("/train")
+async def train(req: TrainRequest):
+    try:
+        record = store_training_result(req.augmented, req.horizon)
+        if record.get("status") != "ok":
+            raise ValueError(record.get("error") or "Training failed")
+        return jsonable_encoder(record.get("result"))
+    except Exception as exc:
+        key = 'augmented' if req.augmented else 'real'
+        LAST_TRAINING[key] = {
+            "status": "error",
+            "timestamp": datetime.utcnow().isoformat() + 'Z',
+            "augmented": req.augmented,
+            "result": None,
+            "error": str(exc),
+            "horizon": req.horizon,
+        }
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/training/results")
+async def training_results():
+    return jsonable_encoder({
+        "real": LAST_TRAINING.get("real"),
+        "augmented": LAST_TRAINING.get("augmented"),
+    })
+async def training_results():
+    return jsonable_encoder({
+        "real": LAST_TRAINING.get("real"),
+        "augmented": LAST_TRAINING.get("augmented"),
     })

@@ -2,7 +2,7 @@ import React from "react";
 import type { UploadResponse } from "../types";
 import ForecastChart from "./ForecastChart";
 import ChartActions from "./ChartActions";
-import { extendSeriesToYear } from "../lib/time";
+import { extendSeriesToYear, parseQuarter } from "../lib/time";
 
 type Props = { data: UploadResponse };
 
@@ -15,6 +15,9 @@ const Forecasting: React.FC<Props> = ({ data }) => {
   const { labels, estimate, demand, supply, band } = React.useMemo(() => {
     if (!ts) return { labels: [] as string[], estimate: [] as number[], demand: [] as number[], supply: [] as number[], band: undefined as any };
 
+    const lastKnown = ts.labels?.length ? parseQuarter(ts.labels[ts.labels.length - 1] || '') : null;
+    const targetYear = lastKnown ? lastKnown.year + 2 : undefined;
+
     const extended = extendSeriesToYear(
       {
         labels: ts.labels,
@@ -26,7 +29,8 @@ const Forecasting: React.FC<Props> = ({ data }) => {
       },
       {
         mlForecast: data.ml ? { labels: data.ml.labels, values: data.ml.forecast, ci: data.ml.ci } : undefined,
-        targetYear: 2034,
+        targetYear,
+        maxFutureQuarters: 8,
       }
     );
 
@@ -99,6 +103,7 @@ const Forecasting: React.FC<Props> = ({ data }) => {
                 band={band || (data.ml?.ci ? { lower: data.ml!.ci!.lower, upper: data.ml!.ci!.upper } : undefined)}
                 height={380}
                 highlightGap="demand-supply"
+                useBrush={false}
               />
             </>
           )}

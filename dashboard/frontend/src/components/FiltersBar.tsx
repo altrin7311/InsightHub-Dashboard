@@ -17,9 +17,17 @@ const FiltersBar: React.FC<Props> = ({ data, value, onChange }) => {
   const change = (patch: Partial<Filters>) => setDraft((d) => ({ ...d, ...patch }));
   const apply = () => onChange(draft);
   const changed = JSON.stringify(draft) !== JSON.stringify(value);
+  const summaryParts: string[] = [];
+  if (value.project) summaryParts.push(`Project ${value.project}`);
+  if (value.trial) summaryParts.push(`Trial ${value.trial}`);
+  if (value.area) summaryParts.push(value.area);
+  if (value.quarter) summaryParts.push(value.quarter);
+  const summaryText = summaryParts.join(', ');
+  const hasFilters = summaryParts.length > 0;
+
   return (
-    <div className="card" style={{ marginBottom: 10 }}>
-      <div className="card-body filter-bar" style={{ flexWrap: 'nowrap', overflowX: 'auto', padding: '12px 16px' }}>
+    <div className="filter-bar-shell">
+      <div className="filter-bar" style={{ flexWrap: 'nowrap', overflowX: 'auto', padding: '10px 12px' }}>
         <span className="label">Project</span>
         <select className="input" value={draft.project || ''} onChange={(e)=> change({ project: e.target.value || undefined })}>
           <option value="">All</option>
@@ -51,7 +59,10 @@ const FiltersBar: React.FC<Props> = ({ data, value, onChange }) => {
             <option value="aug">Real + Synthetic</option>
           </select>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+        <div className="filter-bar-actions" style={{ marginLeft: 'auto' }}>
+          <span className={`filter-summary-pill ${hasFilters ? 'is-active' : 'is-empty'}`}>
+            {hasFilters ? `Filters Applied: ${summaryText}` : 'No filters applied'}
+          </span>
           <button className="btn btn-primary" onClick={apply} disabled={!changed} title={changed ? 'Apply filters' : 'No changes'}>
             Apply Filters
           </button>
